@@ -4,3 +4,5 @@ requests
 anthropic
 gunicorn
 numpy
+rapidfuzz
+google-generativeai
