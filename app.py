@@ -128,7 +128,7 @@ def recommend():
         except Exception as e:
             print(f"Erreur Claude : {e}")
 
-    return jsonify({"error": "Plat non reconnu — essayez un autre nom ou faites une recherche par ingrédient !"}), 404
+    return jsonify({"error": "Plat non reconnu — essayez un autre nom ou faites une recherche par ingrédients !"}), 404
 
 
 if __name__ == "__main__":
