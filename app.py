@@ -26,14 +26,14 @@ def normalize(text):
 
 PLATS_NORMALIZED = {normalize(p): p for p in PLATS_LIST}
 
-def fuzzy_search_bdd(query, limit=5):
+def fuzzy_search_bdd(query, limit=3):
     q_norm = normalize(query)
     results = process.extract(
         q_norm,
         list(PLATS_NORMALIZED.keys()),
         scorer=fuzz.partial_ratio,
         limit=limit,
-        score_cutoff=50
+        score_cutoff=70
     )
     return [PLATS_NORMALIZED[r[0]].title() for r in results]
 
@@ -108,7 +108,7 @@ def search():
     if source == 'spoonacular':
         suggestions = search_spoonacular(query, MA_CLE_SPOONACULAR, limit=4)
         return jsonify({'bdd': [], 'spoonacular': suggestions})
-    bdd_results = fuzzy_search_bdd(query, limit=5)
+    bdd_results = fuzzy_search_bdd(query, limit=3)
     return jsonify({'bdd': bdd_results, 'spoonacular': []})
 
 @app.route('/recommend', methods=['POST'])
