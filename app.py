@@ -1,6 +1,5 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import requests
 import os
 from essai import recommander_vin, recommander_vin_plat
 from donnees_vins import BASE_PLATS
@@ -8,7 +7,7 @@ from rapidfuzz import process, fuzz
 import unicodedata
 
 try:
-    import google.generativeai as genai
+    from google import genai
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
@@ -16,8 +15,7 @@ except ImportError:
 app = Flask(__name__)
 CORS(app)
 
-MA_CLE_SPOONACULAR = os.environ.get('SPOONACULAR_KEY', '8e3a8ffbe0934a31910616110c98b2c5')
-MA_CLE_GEMINI      = os.environ.get('GEMINI_KEY')
+MA_CLE_GEMINI = os.environ.get('GEMINI_KEY')
 
 PLATS_LIST = list(BASE_PLATS.keys())
 
@@ -37,49 +35,11 @@ def fuzzy_search_bdd(query, limit=3):
     )
     return [PLATS_NORMALIZED[r[0]].title() for r in results]
 
-def search_spoonacular(query, api_key, limit=4):
-    try:
-        r = requests.get(
-            'https://api.spoonacular.com/recipes/complexSearch',
-            params={'query': query, 'number': limit, 'apiKey': api_key},
-            timeout=6,
-        )
-        data = r.json()
-        return [item['title'] for item in data.get('results', [])]
-    except Exception as e:
-        print('Erreur Spoonacular search : ' + str(e))
-        return []
-
-def analyser_plat_avec_api(nom_plat, api_key):
-    try:
-        r = requests.get(
-            'https://api.spoonacular.com/recipes/complexSearch',
-            params={'query': nom_plat, 'number': 1, 'apiKey': api_key},
-            timeout=8,
-        )
-        data = r.json()
-        if not data.get('results'):
-            return None
-        recipe_id    = data['results'][0]['id']
-        recipe_title = data['results'][0]['title']
-        r2 = requests.get(
-            'https://api.spoonacular.com/recipes/' + str(recipe_id) + '/information',
-            params={'apiKey': api_key},
-            timeout=8,
-        )
-        recipe_data = r2.json()
-        ingredients = [ing['name'] for ing in recipe_data.get('extendedIngredients', [])[:5]]
-        return {'nom': recipe_title, 'ingredients': ingredients}
-    except Exception as e:
-        print('Erreur Spoonacular : ' + str(e))
-        return None
-
 def generer_mots_cles_gemini(nom_plat, vins, api_key):
     if not api_key or not GEMINI_AVAILABLE:
         return {}
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        client = genai.Client(api_key=api_key)
         mots_cles = {}
         for vin in vins[:3]:
             prompt = (
@@ -87,7 +47,10 @@ def generer_mots_cles_gemini(nom_plat, vins, api_key):
                 'donne exactement 3 mots-cles de degustation separes par des virgules. '
                 'Exemples: mineral, fruite, elegant. Reponds uniquement avec les 3 mots.'
             )
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=prompt
+            )
             mots = [m.strip().lower() for m in response.text.split(',')][:3]
             mots_cles[vin] = mots
         return mots_cles
@@ -101,15 +64,11 @@ def index():
 
 @app.route('/search', methods=['GET'])
 def search():
-    query  = request.args.get('q', '').strip()
-    source = request.args.get('source', 'bdd')
+    query = request.args.get('q', '').strip()
     if not query or len(query) < 2:
-        return jsonify({'bdd': [], 'spoonacular': []})
-    if source == 'spoonacular':
-        suggestions = search_spoonacular(query, MA_CLE_SPOONACULAR, limit=4)
-        return jsonify({'bdd': [], 'spoonacular': suggestions})
+        return jsonify({'bdd': []})
     bdd_results = fuzzy_search_bdd(query, limit=3)
-    return jsonify({'bdd': bdd_results, 'spoonacular': []})
+    return jsonify({'bdd': bdd_results})
 
 @app.route('/recommend', methods=['POST'])
 def recommend():
@@ -152,16 +111,6 @@ def recommend():
         vins = rec['vins']
         mots_cles = generer_mots_cles_gemini(plat_trouve, vins, MA_CLE_GEMINI)
         return jsonify({'plat': plat_trouve.title(), 'vins': vins, 'mots_cles': mots_cles, 'source': 'expert'})
-
-    resultat    = analyser_plat_avec_api(nom_plat, MA_CLE_SPOONACULAR)
-    ingredients = resultat['ingredients'] if resultat else None
-    rec         = recommander_vin(nom_plat=nom_plat, ingredients=ingredients)
-
-    if rec.get('vins'):
-        display_name = resultat['nom'] if resultat else nom_plat.title()
-        vins = rec['vins']
-        mots_cles = generer_mots_cles_gemini(display_name, vins, MA_CLE_GEMINI)
-        return jsonify({'plat': display_name, 'vins': vins, 'mots_cles': mots_cles, 'source': 'ingredients'})
 
     return jsonify({'error': 'Plat non reconnu, essayez un autre nom.'}), 404
 

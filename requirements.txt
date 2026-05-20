@@ -1,8 +1,7 @@
 flask
 flask-cors
 requests
-anthropic
 gunicorn
 numpy
 rapidfuzz
-google-generativeai
+google-genai
