@@ -2,6 +2,8 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 import os
+import smtplib
+from email.message import EmailMessage
 from essai import recommander_vin, recommander_vin_plat
 from donnees_vins import BASE_PLATS
 from rapidfuzz import process, fuzz
@@ -18,6 +20,8 @@ CORS(app)
 
 MA_CLE_SPOONACULAR = os.environ.get('SPOONACULAR_KEY', '')
 MA_CLE_GEMINI      = os.environ.get('GEMINI_KEY')
+GMAIL_USER         = os.environ.get('GMAIL_USER')
+GMAIL_PASSWORD     = os.environ.get('GMAIL_APP_PASSWORD')
 
 PLATS_LIST = list(BASE_PLATS.keys())
 
@@ -38,7 +42,6 @@ def fuzzy_search_bdd(query, limit=3):
     return [PLATS_NORMALIZED[r[0]].title() for r in results]
 
 def gemini_mots_cles(nom_plat, vins, api_key):
-    """Genere 3 mots-cles de degustation pour chaque vin via Gemini."""
     if not api_key or not GEMINI_AVAILABLE:
         return {}
     try:
@@ -50,10 +53,7 @@ def gemini_mots_cles(nom_plat, vins, api_key):
                 'donne exactement 3 mots-cles de degustation separes par des virgules. '
                 'Exemples: mineral, fruite, elegant. Reponds uniquement avec les 3 mots, rien d autre.'
             )
-            response = client.models.generate_content(
-                model='gemini-2.0-flash',
-                contents=prompt
-            )
+            response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
             mots = [m.strip().lower() for m in response.text.strip().split(',')][:3]
             mots_cles[vin] = mots
         return mots_cles
@@ -62,7 +62,6 @@ def gemini_mots_cles(nom_plat, vins, api_key):
         return {}
 
 def gemini_vin_inconnu(nom_plat, api_key):
-    """Pour un plat inconnu, Gemini suggere 1 type de vin + 3 mots-cles."""
     if not api_key or not GEMINI_AVAILABLE:
         return None
     try:
@@ -75,10 +74,7 @@ def gemini_vin_inconnu(nom_plat, api_key):
             'Exemple:\nVIN: Bourgogne blanc sec\nMOTS: mineral, fruite, elegant\n'
             'Ne mets rien d autre.'
         )
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=prompt
-        )
+        response = client.models.generate_content(model='gemini-2.0-flash', contents=prompt)
         lines = response.text.strip().splitlines()
         vin = None
         mots = []
@@ -93,6 +89,26 @@ def gemini_vin_inconnu(nom_plat, api_key):
     except Exception as e:
         print('Erreur Gemini vin_inconnu : ' + str(e))
         return None
+
+def envoyer_email_contribution(prenom, plat, vin, experience):
+    if not GMAIL_USER or not GMAIL_PASSWORD:
+        raise ValueError('Variables Gmail manquantes.')
+    msg = EmailMessage()
+    msg['Subject'] = f'[Vin/20] Nouvelle contribution — {plat}'
+    msg['From']    = GMAIL_USER
+    msg['To']      = GMAIL_USER
+    msg.set_content(
+        f'Nouvelle contribution Vin/20\n'
+        f'{'=' * 40}\n\n'
+        f'Prénom     : {prenom}\n'
+        f'Plat       : {plat}\n'
+        f'Vin        : {vin}\n\n'
+        f'Expérience :\n{experience}\n'
+    )
+    with smtplib.SMTP('smtp.gmail.com', 587) as smtp:
+        smtp.starttls()
+        smtp.login(GMAIL_USER, GMAIL_PASSWORD)
+        smtp.send_message(msg)
 
 @app.route('/')
 def index():
@@ -131,26 +147,20 @@ def recommend():
         if isinstance(rec, dict) and rec.get('vins'):
             vins = rec['vins']
             mots_cles = gemini_mots_cles('ce plat', vins, MA_CLE_GEMINI)
-            return jsonify({
-                'plat': 'Selection par ingredients',
-                'vins': vins,
-                'couleur': rec.get('couleur_dominante', ''),
-                'mots_cles': mots_cles,
-                'source': 'expert'
-            })
+            return jsonify({'plat': 'Selection par ingredients', 'vins': vins,
+                            'couleur': rec.get('couleur_dominante', ''),
+                            'mots_cles': mots_cles, 'source': 'expert'})
         return jsonify({'error': 'Impossible de determiner un vin pour ces ingredients.'}), 404
 
     if not nom_plat:
         return jsonify({'error': 'Veuillez entrer un nom de plat.'}), 400
 
-    # Plat exact dans la BDD
     if nom_plat in BASE_PLATS:
         rec  = recommander_vin(nom_plat=nom_plat, ingredients=None)
         vins = rec['vins']
         mots_cles = gemini_mots_cles(nom_plat, vins, MA_CLE_GEMINI)
         return jsonify({'plat': nom_plat.title(), 'vins': vins, 'mots_cles': mots_cles, 'source': 'expert'})
 
-    # Fuzzy match dans la BDD
     fuzzy_result = process.extractOne(
         normalize(nom_plat),
         list(PLATS_NORMALIZED.keys()),
@@ -164,19 +174,32 @@ def recommend():
         mots_cles = gemini_mots_cles(plat_trouve, vins, MA_CLE_GEMINI)
         return jsonify({'plat': plat_trouve.title(), 'vins': vins, 'mots_cles': mots_cles, 'source': 'expert'})
 
-    # Plat inconnu => Gemini suggere 1 vin
     resultat_gemini = gemini_vin_inconnu(nom_plat, MA_CLE_GEMINI)
     if resultat_gemini:
         vin  = resultat_gemini['vin']
         mots = resultat_gemini['mots']
-        return jsonify({
-            'plat': nom_plat.title(),
-            'vins': [vin],
-            'mots_cles': {vin: mots},
-            'source': 'expert'
-        })
+        return jsonify({'plat': nom_plat.title(), 'vins': [vin],
+                        'mots_cles': {vin: mots}, 'source': 'expert'})
 
     return jsonify({'error': 'Plat non reconnu, essayez un autre nom.'}), 404
+
+@app.route('/contribution', methods=['POST'])
+def contribution():
+    body       = request.get_json(force=True)
+    prenom     = body.get('prenom', '').strip()
+    plat       = body.get('plat', '').strip()
+    vin        = body.get('vin', '').strip()
+    experience = body.get('experience', '').strip()
+
+    if not prenom or not plat or not vin or not experience:
+        return jsonify({'error': 'Tous les champs sont obligatoires.'}), 400
+
+    try:
+        envoyer_email_contribution(prenom, plat, vin, experience)
+        return jsonify({'ok': True, 'message': 'Contribution envoyée avec succès.'})
+    except Exception as e:
+        print(f'Erreur envoi email contribution : {e}')
+        return jsonify({'error': 'Impossible d envoyer l email pour le moment.'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
