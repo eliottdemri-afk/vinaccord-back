@@ -2,8 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
 import os
-import smtplib
-from email.message import EmailMessage
+import resend
 from essai import recommander_vin, recommander_vin_plat
 from donnees_vins import BASE_PLATS
 from rapidfuzz import process, fuzz
@@ -20,8 +19,8 @@ CORS(app)
 
 MA_CLE_SPOONACULAR = os.environ.get('SPOONACULAR_KEY', '')
 MA_CLE_GEMINI      = os.environ.get('GEMINI_KEY')
-GMAIL_USER         = os.environ.get('GMAIL_USER')
-GMAIL_PASSWORD     = os.environ.get('GMAIL_APP_PASSWORD')
+RESEND_API_KEY     = os.environ.get('RESEND_API_KEY')
+GMAIL_USER         = os.environ.get('GMAIL_USER', 'eliott.demri@gmail.com')
 
 PLATS_LIST = list(BASE_PLATS.keys())
 
@@ -91,24 +90,23 @@ def gemini_vin_inconnu(nom_plat, api_key):
         return None
 
 def envoyer_email_contribution(prenom, plat, vin, experience):
-    if not GMAIL_USER or not GMAIL_PASSWORD:
-        raise ValueError('Variables Gmail manquantes.')
-    msg = EmailMessage()
-    msg['Subject'] = f'[Vin/20] Nouvelle contribution — {plat}'
-    msg['From']    = GMAIL_USER
-    msg['To']      = GMAIL_USER
-    msg.set_content(
-        f'Nouvelle contribution Vin/20\n'
-        f'{'=' * 40}\n\n'
-        f'Prénom     : {prenom}\n'
-        f'Plat       : {plat}\n'
-        f'Vin        : {vin}\n\n'
-        f'Expérience :\n{experience}\n'
-    )
-    with smtplib.SMTP('smtp.gmail.com', 587) as smtp:
-        smtp.starttls()
-        smtp.login(GMAIL_USER, GMAIL_PASSWORD)
-        smtp.send_message(msg)
+    if not RESEND_API_KEY:
+        raise ValueError('RESEND_API_KEY manquante.')
+    resend.api_key = RESEND_API_KEY
+    params = {
+        'from': 'Vin/20 <onboarding@resend.dev>',
+        'to': [GMAIL_USER],
+        'subject': f'[Vin/20] Nouvelle contribution \u2014 {plat}',
+        'text': (
+            f'Nouvelle contribution Vin/20\n'
+            f'{"=" * 40}\n\n'
+            f'Pr\u00e9nom     : {prenom}\n'
+            f'Plat       : {plat}\n'
+            f'Vin        : {vin}\n\n'
+            f'Exp\u00e9rience :\n{experience}\n'
+        )
+    }
+    resend.Emails.send(params)
 
 @app.route('/')
 def index():
@@ -196,7 +194,7 @@ def contribution():
 
     try:
         envoyer_email_contribution(prenom, plat, vin, experience)
-        return jsonify({'ok': True, 'message': 'Contribution envoyée avec succès.'})
+        return jsonify({'ok': True, 'message': 'Contribution envoy\u00e9e avec succ\u00e8s.'})
     except Exception as e:
         print(f'Erreur envoi email contribution : {e}')
         return jsonify({'error': 'Impossible d envoyer l email pour le moment.'}), 500

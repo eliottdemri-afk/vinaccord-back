@@ -5,3 +5,4 @@ gunicorn
 numpy
 rapidfuzz
 google-genai
+resend
