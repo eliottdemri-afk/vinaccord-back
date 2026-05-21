@@ -143,9 +143,10 @@ def recommend():
         mots_cles = gemini_mots_cles(nom_plat, vins, MA_CLE_GEMINI)
         return jsonify({'plat': nom_plat.title(), 'vins': vins, 'mots_cles': mots_cles, 'source': 'expert'})
 
+    # fuzz.ratio = similarite globale (pas sous-chaine) => evite les faux positifs type "spaghetti a rien"
     fuzzy_result = process.extractOne(
         normalize(nom_plat), list(PLATS_NORMALIZED.keys()),
-        scorer=fuzz.partial_ratio, score_cutoff=75
+        scorer=fuzz.ratio, score_cutoff=82
     )
     if fuzzy_result:
         plat_trouve = PLATS_NORMALIZED[fuzzy_result[0]]
